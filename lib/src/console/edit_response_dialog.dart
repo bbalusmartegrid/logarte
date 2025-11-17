@@ -19,11 +19,9 @@ class EditResponseDialog extends StatefulWidget {
 
 class _EditResponseDialogState extends State<EditResponseDialog> {
   late TextEditingController _statusCodeController;
-  late TextEditingController _bodyController;
-  late TextEditingController _headersController;
+  late List<FieldEntry> _bodyFields;
+  late List<FieldEntry> _headerFields;
   final _formKey = GlobalKey<FormState>();
-  String? _bodyError;
-  String? _headersError;
 
   @override
   void initState() {
@@ -40,77 +38,182 @@ class _EditResponseDialogState extends State<EditResponseDialog> {
               200)
           .toString(),
     );
-    _bodyController = TextEditingController(
-      text: _formatJson(
-        existingOverride?.body ?? widget.entry.response.body,
-      ),
+
+    // Parse body fields
+    _bodyFields = _parseToFields(
+      existingOverride?.body ?? widget.entry.response.body,
     );
-    _headersController = TextEditingController(
-      text: _formatJson(
-        existingOverride?.headers ?? widget.entry.response.headers,
-      ),
+
+    // Parse header fields
+    _headerFields = _parseToFields(
+      existingOverride?.headers ?? widget.entry.response.headers,
     );
   }
 
-  String _formatJson(dynamic data) {
+  List<FieldEntry> _parseToFields(dynamic data) {
+    final fields = <FieldEntry>[];
+
+    if (data == null) return fields;
+
     try {
-      if (data == null) return '';
+      Map<String, dynamic> map;
+
       if (data is String) {
-        // Try to parse and re-format if it's already JSON
         try {
           final parsed = jsonDecode(data);
-          return const JsonEncoder.withIndent('  ').convert(parsed);
+          if (parsed is Map) {
+            map = Map<String, dynamic>.from(parsed);
+          } else {
+            // If it's not a map, create a single field
+            fields.add(FieldEntry(
+              keyController: TextEditingController(text: 'value'),
+              valueController: TextEditingController(text: data),
+            ));
+            return fields;
+          }
         } catch (_) {
-          return data;
+          // Not JSON, treat as single value
+          fields.add(FieldEntry(
+            keyController: TextEditingController(text: 'value'),
+            valueController: TextEditingController(text: data),
+          ));
+          return fields;
         }
-      }
-      return const JsonEncoder.withIndent('  ').convert(data);
-    } catch (_) {
-      return data.toString();
-    }
-  }
-
-  dynamic _parseJson(String text) {
-    if (text.trim().isEmpty) return null;
-    try {
-      return jsonDecode(text);
-    } catch (_) {
-      return text;
-    }
-  }
-
-  bool _validateJson(String text, String fieldName) {
-    if (text.trim().isEmpty) return true;
-    try {
-      jsonDecode(text);
-      return true;
-    } catch (e) {
-      if (fieldName == 'body') {
-        setState(() {
-          _bodyError = 'Invalid JSON: ${e.toString()}';
-        });
+      } else if (data is Map) {
+        map = Map<String, dynamic>.from(data);
       } else {
-        setState(() {
-          _headersError = 'Invalid JSON: ${e.toString()}';
-        });
+        // For other types, create a single field
+        fields.add(FieldEntry(
+          keyController: TextEditingController(text: 'value'),
+          valueController: TextEditingController(text: data.toString()),
+        ));
+        return fields;
       }
-      return false;
+
+      // Convert map to field entries
+      _flattenMap(map, fields);
+
+    } catch (_) {
+      // If parsing fails, return empty or default
     }
+
+    return fields;
+  }
+
+  void _flattenMap(Map<String, dynamic> map, List<FieldEntry> fields, [String prefix = '']) {
+    map.forEach((key, value) {
+      final fullKey = prefix.isEmpty ? key : '$prefix.$key';
+
+      if (value is Map) {
+        // Recursively flatten nested objects
+        _flattenMap(Map<String, dynamic>.from(value), fields, fullKey);
+      } else if (value is List) {
+        // Convert list to JSON string for editing
+        fields.add(FieldEntry(
+          keyController: TextEditingController(text: fullKey),
+          valueController: TextEditingController(
+            text: jsonEncode(value),
+          ),
+          isArray: true,
+        ));
+      } else {
+        fields.add(FieldEntry(
+          keyController: TextEditingController(text: fullKey),
+          valueController: TextEditingController(
+            text: value?.toString() ?? '',
+          ),
+        ));
+      }
+    });
+  }
+
+  Map<String, dynamic> _buildMapFromFields(List<FieldEntry> fields) {
+    final result = <String, dynamic>{};
+
+    for (final field in fields) {
+      final key = field.keyController.text.trim();
+      if (key.isEmpty) continue;
+
+      final valueText = field.valueController.text.trim();
+      dynamic value;
+
+      // Try to parse as JSON for arrays or objects
+      if (field.isArray || valueText.startsWith('[') || valueText.startsWith('{')) {
+        try {
+          value = jsonDecode(valueText);
+        } catch (_) {
+          value = valueText;
+        }
+      } else if (valueText.isEmpty) {
+        value = null;
+      } else if (valueText.toLowerCase() == 'true') {
+        value = true;
+      } else if (valueText.toLowerCase() == 'false') {
+        value = false;
+      } else if (valueText.toLowerCase() == 'null') {
+        value = null;
+      } else {
+        // Try to parse as number
+        final numValue = num.tryParse(valueText);
+        value = numValue ?? valueText;
+      }
+
+      // Handle nested keys (e.g., "user.name" -> {"user": {"name": value}})
+      if (key.contains('.')) {
+        final parts = key.split('.');
+        Map<String, dynamic> current = result;
+
+        for (int i = 0; i < parts.length - 1; i++) {
+          current.putIfAbsent(parts[i], () => <String, dynamic>{});
+          if (current[parts[i]] is! Map) {
+            current[parts[i]] = <String, dynamic>{};
+          }
+          current = current[parts[i]] as Map<String, dynamic>;
+        }
+
+        current[parts.last] = value;
+      } else {
+        result[key] = value;
+      }
+    }
+
+    return result;
+  }
+
+  void _addBodyField() {
+    setState(() {
+      _bodyFields.add(FieldEntry(
+        keyController: TextEditingController(),
+        valueController: TextEditingController(),
+      ));
+    });
+  }
+
+  void _addHeaderField() {
+    setState(() {
+      _headerFields.add(FieldEntry(
+        keyController: TextEditingController(),
+        valueController: TextEditingController(),
+      ));
+    });
+  }
+
+  void _removeBodyField(int index) {
+    setState(() {
+      _bodyFields[index].dispose();
+      _bodyFields.removeAt(index);
+    });
+  }
+
+  void _removeHeaderField(int index) {
+    setState(() {
+      _headerFields[index].dispose();
+      _headerFields.removeAt(index);
+    });
   }
 
   void _saveOverride() {
-    setState(() {
-      _bodyError = null;
-      _headersError = null;
-    });
-
     if (!_formKey.currentState!.validate()) return;
-
-    final bodyText = _bodyController.text.trim();
-    final headersText = _headersController.text.trim();
-
-    if (!_validateJson(bodyText, 'body')) return;
-    if (!_validateJson(headersText, 'headers')) return;
 
     final statusCode = int.tryParse(_statusCodeController.text);
     if (statusCode == null) {
@@ -120,12 +223,8 @@ class _EditResponseDialogState extends State<EditResponseDialog> {
       return;
     }
 
-    final body = _parseJson(bodyText);
-    final headersData = _parseJson(headersText);
-    Map<String, dynamic>? headers;
-    if (headersData != null && headersData is Map) {
-      headers = Map<String, dynamic>.from(headersData);
-    }
+    final bodyMap = _buildMapFromFields(_bodyFields);
+    final headersMap = _buildMapFromFields(_headerFields);
 
     final manager = ResponseOverrideManager();
     manager.setOverride(
@@ -133,8 +232,8 @@ class _EditResponseDialogState extends State<EditResponseDialog> {
       url: widget.entry.request.url,
       override: ResponseOverride(
         statusCode: statusCode,
-        body: body,
-        headers: headers,
+        body: bodyMap.isEmpty ? null : bodyMap,
+        headers: headersMap.isEmpty ? null : headersMap,
       ),
     );
 
@@ -153,8 +252,12 @@ class _EditResponseDialogState extends State<EditResponseDialog> {
   @override
   void dispose() {
     _statusCodeController.dispose();
-    _bodyController.dispose();
-    _headersController.dispose();
+    for (final field in _bodyFields) {
+      field.dispose();
+    }
+    for (final field in _headerFields) {
+      field.dispose();
+    }
     super.dispose();
   }
 
@@ -216,79 +319,138 @@ class _EditResponseDialogState extends State<EditResponseDialog> {
                     ],
                   ),
                 ),
-              const Text(
-                'STATUS CODE',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
+
+              // Status Code Section
+              Row(
+                children: [
+                  const Text(
+                    'STATUS CODE',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const Spacer(),
+                  SizedBox(
+                    width: 100,
+                    child: TextFormField(
+                      controller: _statusCodeController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        hintText: '200',
+                        isDense: true,
+                      ),
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Required';
+                        }
+                        final code = int.tryParse(value);
+                        if (code == null || code < 100 || code > 599) {
+                          return 'Invalid';
+                        }
+                        return null;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 16),
+
+              // Response Body Section
+              Row(
+                children: [
+                  const Text(
+                    'RESPONSE BODY',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _addBodyField,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Add Field'),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
-              TextFormField(
-                controller: _statusCodeController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  hintText: '200',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Status code is required';
-                  }
-                  final code = int.tryParse(value);
-                  if (code == null || code < 100 || code > 599) {
-                    return 'Enter a valid HTTP status code (100-599)';
-                  }
-                  return null;
-                },
-              ),
+
+              if (_bodyFields.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(16.0),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8.0),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'No fields. Tap "Add Field" to create one.',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                )
+              else
+                ...List.generate(_bodyFields.length, (index) {
+                  return _FieldRow(
+                    field: _bodyFields[index],
+                    onRemove: () => _removeBodyField(index),
+                    index: index,
+                  );
+                }),
+
               const SizedBox(height: 24),
-              const Text(
-                'RESPONSE BODY (JSON)',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
+              const Divider(),
+              const SizedBox(height: 16),
+
+              // Response Headers Section
+              Row(
+                children: [
+                  const Text(
+                    'RESPONSE HEADERS',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _addHeaderField,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Add Field'),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
-              TextFormField(
-                controller: _bodyController,
-                maxLines: 10,
-                decoration: InputDecoration(
-                  hintText: '{"key": "value"}',
-                  border: const OutlineInputBorder(),
-                  errorText: _bodyError,
-                  errorMaxLines: 3,
-                ),
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                ),
-              ),
+
+              if (_headerFields.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(16.0),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8.0),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'No fields. Tap "Add Field" to create one.',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                )
+              else
+                ...List.generate(_headerFields.length, (index) {
+                  return _FieldRow(
+                    field: _headerFields[index],
+                    onRemove: () => _removeHeaderField(index),
+                    index: index,
+                  );
+                }),
+
               const SizedBox(height: 24),
-              const Text(
-                'RESPONSE HEADERS (JSON)',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _headersController,
-                maxLines: 6,
-                decoration: InputDecoration(
-                  hintText: '{"content-type": "application/json"}',
-                  border: const OutlineInputBorder(),
-                  errorText: _headersError,
-                  errorMaxLines: 3,
-                ),
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(height: 24),
+
               Container(
                 padding: const EdgeInsets.all(12.0),
                 decoration: BoxDecoration(
@@ -303,7 +465,7 @@ class _EditResponseDialogState extends State<EditResponseDialog> {
                         Icon(Icons.info_outline, size: 20, color: Colors.blue),
                         SizedBox(width: 8),
                         Text(
-                          'Note',
+                          'Tips',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             color: Colors.blue,
@@ -313,9 +475,10 @@ class _EditResponseDialogState extends State<EditResponseDialog> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'This override will apply to all future requests matching:\n'
-                      '${widget.entry.request.method} ${widget.entry.request.url}\n\n'
-                      'Make sure response interception is enabled in the dashboard.',
+                      '• Use dot notation for nested objects (e.g., "user.name")\n'
+                      '• Values are auto-typed: numbers, booleans (true/false), null\n'
+                      '• Arrays/objects: use JSON format [1,2,3] or {"key":"value"}\n'
+                      '• Override applies to: ${widget.entry.request.method} ${widget.entry.request.url}',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ],
@@ -324,6 +487,92 @@ class _EditResponseDialogState extends State<EditResponseDialog> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class FieldEntry {
+  final TextEditingController keyController;
+  final TextEditingController valueController;
+  final bool isArray;
+
+  FieldEntry({
+    required this.keyController,
+    required this.valueController,
+    this.isArray = false,
+  });
+
+  void dispose() {
+    keyController.dispose();
+    valueController.dispose();
+  }
+}
+
+class _FieldRow extends StatelessWidget {
+  final FieldEntry field;
+  final VoidCallback onRemove;
+  final int index;
+
+  const _FieldRow({
+    required this.field,
+    required this.onRemove,
+    required this.index,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 2,
+            child: TextFormField(
+              controller: field.keyController,
+              decoration: InputDecoration(
+                labelText: 'Key',
+                hintText: 'field_name',
+                isDense: true,
+                border: const OutlineInputBorder(),
+                suffixIcon: field.isArray
+                    ? const Tooltip(
+                        message: 'Array field',
+                        child: Icon(Icons.list, size: 16),
+                      )
+                    : null,
+              ),
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Required';
+                }
+                return null;
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 3,
+            child: TextFormField(
+              controller: field.valueController,
+              decoration: const InputDecoration(
+                labelText: 'Value',
+                hintText: 'value',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              maxLines: field.isArray ? 3 : 1,
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: onRemove,
+            icon: const Icon(Icons.remove_circle_outline),
+            color: Colors.red,
+            tooltip: 'Remove field',
+          ),
+        ],
       ),
     );
   }
