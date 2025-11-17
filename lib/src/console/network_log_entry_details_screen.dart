@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:logarte/logarte.dart';
+import 'package:logarte/src/console/edit_response_dialog.dart';
 import 'package:logarte/src/console/logarte_theme_wrapper.dart';
 import 'package:logarte/src/extensions/entry_extensions.dart';
 import 'package:logarte/src/extensions/object_extensions.dart';
 import 'package:logarte/src/extensions/string_extensions.dart';
+import 'package:logarte/src/models/response_override.dart';
 
-enum MenuItem { copy, copyCurl, share }
+enum MenuItem { copy, copyCurl, share, editResponse }
 
 class NetworkLogEntryDetailsScreen extends StatefulWidget {
   final NetworkLogarteEntry entry;
@@ -34,7 +36,7 @@ class _NetworkLogEntryDetailsScreenState
     super.dispose();
   }
 
-  void handleClick(BuildContext context, MenuItem item) {
+  void handleClick(BuildContext context, MenuItem item) async {
     switch (item) {
       case MenuItem.copy:
         final String text = widget.entry.toString();
@@ -50,6 +52,23 @@ class _NetworkLogEntryDetailsScreenState
         final String text = widget.entry.toString();
 
         widget.instance.onShare?.call(text);
+        break;
+      case MenuItem.editResponse:
+        final result = await Navigator.of(context).push<bool>(
+          MaterialPageRoute(
+            builder: (_) => EditResponseDialog(entry: widget.entry),
+            settings: const RouteSettings(name: '/logarte_edit_response'),
+          ),
+        );
+        if (result == true && mounted) {
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Response override saved'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
         break;
     }
   }
@@ -76,7 +95,33 @@ class _NetworkLogEntryDetailsScreenState
                 handleClick(context, item);
               },
               itemBuilder: (_) {
+                final manager = ResponseOverrideManager();
+                final hasOverride = manager.hasOverride(
+                  method: widget.entry.request.method,
+                  url: widget.entry.request.url,
+                );
+
                 return <PopupMenuEntry<MenuItem>>[
+                  PopupMenuItem<MenuItem>(
+                    value: MenuItem.editResponse,
+                    child: Row(
+                      children: [
+                        Icon(
+                          hasOverride ? Icons.edit : Icons.edit_outlined,
+                          size: 20,
+                          color: hasOverride ? Colors.orange : null,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          hasOverride ? 'Edit Override' : 'Edit Response',
+                          style: TextStyle(
+                            color: hasOverride ? Colors.orange : null,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuDivider(),
                   const PopupMenuItem<MenuItem>(
                     value: MenuItem.copy,
                     child: Text('Copy'),

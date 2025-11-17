@@ -1,8 +1,10 @@
 import 'package:dio/dio.dart';
 import 'package:logarte/logarte.dart';
+import 'package:logarte/src/models/response_override.dart';
 
 class LogarteDioInterceptor extends Interceptor {
   final Logarte _logarte;
+  final ResponseOverrideManager _overrideManager = ResponseOverrideManager();
 
   LogarteDioInterceptor(this._logarte);
 
@@ -22,6 +24,51 @@ class LogarteDioInterceptor extends Interceptor {
     );
     final sentAt = _cache[response.requestOptions];
     final receivedAt = DateTime.now();
+
+    // Check if response interception is enabled and if there's an override
+    if (_overrideManager.isEnabled.value) {
+      final override = _overrideManager.getOverride(
+        method: response.requestOptions.method,
+        url: response.requestOptions.uri.toString(),
+      );
+
+      if (override != null) {
+        // Create a modified response with overridden values
+        final modifiedResponse = Response(
+          requestOptions: response.requestOptions,
+          data: override.body ?? response.data,
+          statusCode: override.statusCode ?? response.statusCode,
+          statusMessage: response.statusMessage,
+          headers: override.headers != null
+              ? Headers.fromMap(override.headers!)
+              : response.headers,
+          extra: response.extra,
+        );
+
+        // Log the modified response
+        _logarte.network(
+          request: NetworkRequestLogarteEntry(
+            url: response.requestOptions.uri.toString(),
+            method: response.requestOptions.method,
+            headers: response.requestOptions.headers,
+            body: response.requestOptions.data,
+            sentAt: sentAt,
+          ),
+          response: NetworkResponseLogarteEntry(
+            statusCode: modifiedResponse.statusCode,
+            headers: modifiedResponse.headers.map.map(
+              (key, value) => MapEntry(key, value.join(', ')),
+            ),
+            body: modifiedResponse.data,
+            receivedAt: receivedAt,
+          ),
+          write: false,
+        );
+
+        // Return the modified response to the app
+        return handler.resolve(modifiedResponse);
+      }
+    }
 
     _logarte.network(
       request: NetworkRequestLogarteEntry(

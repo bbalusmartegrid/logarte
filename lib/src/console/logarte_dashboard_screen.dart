@@ -3,6 +3,7 @@ import 'package:logarte/logarte.dart';
 import 'package:logarte/src/console/logarte_entry_item.dart';
 import 'package:logarte/src/console/logarte_fab_state.dart';
 import 'package:logarte/src/console/logarte_theme_wrapper.dart';
+import 'package:logarte/src/models/response_override.dart';
 
 class LogarteDashboardScreen extends StatefulWidget {
   final Logarte instance;
@@ -103,6 +104,34 @@ class _LogarteDashboardScreenState extends State<LogarteDashboardScreen> {
                     },
                   ),
                   actions: [
+                    ValueListenableBuilder<bool>(
+                      valueListenable: ResponseOverrideManager().isEnabled,
+                      builder: (context, isEnabled, child) {
+                        return IconButton(
+                          onPressed: () {
+                            ResponseOverrideManager().toggleEnabled();
+                            final message = ResponseOverrideManager().isEnabled.value
+                                ? 'Response interception enabled'
+                                : 'Response interception disabled';
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(message),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          },
+                          icon: Icon(
+                            isEnabled
+                                ? Icons.swap_horiz
+                                : Icons.swap_horiz_outlined,
+                          ),
+                          color: isEnabled ? Colors.orange : null,
+                          tooltip: isEnabled
+                              ? 'Response Interception ON'
+                              : 'Response Interception OFF',
+                        );
+                      },
+                    ),
                     if (widget.instance.onExport != null)
                       IconButton(
                         onPressed: () => _exportAllLogs(),
